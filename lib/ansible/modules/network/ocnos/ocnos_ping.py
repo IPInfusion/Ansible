@@ -82,7 +82,7 @@ commands:
   description: Show the command sent.
   returned: always
   type: list
-  sample: ["ping vrf prod 10.40.40.40 count 20 source loopback0"]
+  sample: ["ping\nip\n \n192.168.122.1\n3\n64\n1\n100\n2\n0\nn\nn\n"]
 packet_loss:
   description: Percentage of packets lost.
   returned: always
@@ -92,17 +92,17 @@ packets_rx:
   description: Packets successfully received.
   returned: always
   type: int
-  sample: 20
+  sample: 3
 packets_tx:
   description: Packets successfully transmitted.
   returned: always
   type: int
-  sample: 20
+  sample: 3
 rtt:
   description: Show RTT stats.
   returned: always
   type: dict
-  sample: {"avg": 2, "max": 8, "min": 1}
+  sample: {"avg": 0.115, "max": 0.135, "min": 0.079}
 '''
 
 from ansible.module_utils.basic import AnsibleModule
@@ -110,7 +110,6 @@ from ansible.module_utils.network.ocnos.ocnos import run_commands
 from ansible.module_utils.network.ocnos.ocnos import get_connection
 from ansible.module_utils.network.ocnos.ocnos import ocnos_argument_spec
 import re
-import os
 
 
 def main():
@@ -120,6 +119,7 @@ def main():
         count=dict(type="int", default=1),
         ttl=dict(type="int", default=64),
         dest=dict(type="str", required=True),
+        source=dict(type="str"),
         ipproto=dict(type="str", choices=["ip", "ipv6"], default="ip"),
         state=dict(type="str", choices=["absent", "present"], default="present"),
         vrf=dict(type="str", default="management"),
@@ -137,17 +137,29 @@ def main():
     vrf = module.params["vrf"]
     ipproto = module.params["ipproto"]
     interface = module.params["interface"]
+    source = module.params["source"]
 
+    warnings = list()
+    results = {}
+    
     outinterface = ""
     if ipv6addr_re.match(dest):
         ipproto = "ipv6"
         lladdr_re = re.compile(r"^[Ff][Ee]80:[a-fA-F0-9:]+$")
         if lladdr_re.match(dest):
-            outinterface = interface + "\n"
+            if interface is None:
+                module.fail_json(msg="Interface is not specified for IPv6 linklocal address", **results)
+                module.exit_json(**results)
+                return
+            else:
+                outinterface = interface + "\n"
 
-    warnings = list()
+    if outinterface is None and interface is not None:
+        warnings.append("interface parameter is not effective if dest is not IPv6 linklocal adderss")
 
-    results = {}
+    if source is not None:
+        warnings.append("source parameter is not effective in OcNOS")
+
     if warnings:
         results["warnings"] = warnings
 
@@ -156,19 +168,15 @@ def main():
         results["commands"] = "ping\n{0}\n{1}\n{2}\n{3}\n{4}\n{5}\n{6}\n{7}\n{8}\n{9}\n{10}\n".format("ip", vrf, dest, count, ttl, 1, 100, 2, 0, "n", "n")
     else:
         results["commands"] = "ping\n{0}\n{1}\n{2}\n{3}\n{4}\n{5}\n{6}\n{7}\n{8}\n{9}\n{10}".format("ipv6", vrf, dest, count, ttl, 1, 100, 2, 0, "n", outinterface)
-    os.system("echo '%s' >> /tmp/output.txt" % results["commands"])
     ping_results = connection.get(results["commands"])
-    os.system("echo '%s' >> /tmp/output.txt" % ping_results)
     ping_results_list = ping_results.split("\n")
-    os.system("echo 'ping_results_list = %s' >> /tmp/output.txt" % ping_results_list)
     if len(ping_results_list) < 2:
-        results["faild"] = 1
+        results["failed"] = True
         module.exit_json(**results)
         return
 
     stats = ping_results_list[len(ping_results_list) - 2]
     rtts = ping_results_list[len(ping_results_list) - 1]
-    os.system("echo 'stats = %s, rtts = [%s]' >> /tmp/output.txt" % (stats, rtts))
     if rtts.startswith("%Network is unreachable"):
         loss = 100
         rx = "0"
@@ -176,7 +184,6 @@ def main():
         rtt = {"max": "0", "avg": "0", "min": "0"}
     else:
         loss, rx, tx, rtt = parse_ping(stats, rtts)
-        os.system("echo 'parsed_rtt = [%s]' >> /tmp/output.txt" % rtt)
         loss = int(loss)
         
     results["packet_loss"] = str(loss) + "%"
@@ -212,15 +219,16 @@ def parse_ping(line1, line2):
     else:
         rate = rate_re.match(line2)
         rtt = None
-        
-    os.system("echo 'rates = %s' >> /tmp/output.txt" % rate)
-    os.system("echo 'rtt = %s' >> /tmp/output.txt" % rtt)
+
     if rtt is None:
         rtt_groupdict = {"max": "0", "avg": "0", "min": "0"}
     else:
         rtt_groupdict = rtt.groupdict()
 
-    return rate.group("pct"), rate.group("rx"), rate.group("tx"), rtt_groupdict
+    return rate.group("pct") if rate is not None else 100, \
+        rate.group("rx") if rate is not None else 0, \
+        rate.group("tx") if rate is not None else 0, \
+        rtt_groupdict
 
 
 def validate_results(module, loss, results):

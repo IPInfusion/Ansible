@@ -40,7 +40,7 @@ class TerminalModule(TerminalBase):
         re.compile(br"\r\n% (?:Incomplete|Unrecognized) command", re.I),
         re.compile(br"\r\n% Invalid input", re.I),
         re.compile(br"% Running configuration store is locked by other client"),
-        re.compile(br"\r\n%% "),
+        re.compile(br"\r\n%% (?!System Reboot required,|Filter group is already enabled|Existing Router ID in use, Use).*"),
     ]
 
     def on_open_shell(self):
